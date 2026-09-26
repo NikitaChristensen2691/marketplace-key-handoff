@@ -1,0 +1,20 @@
+{
+  "name": "marketplace-key-handoff",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/marketplace_handoff_server.js",
+    "example": "node dist/src/run_rotation.js",
+    "test": "npm run build && node --test dist/test/handoff_decision.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
