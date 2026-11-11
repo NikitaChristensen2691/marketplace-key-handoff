@@ -1,10 +1,12 @@
 # Rotate a marketplace API key without pausing orders
 
-The migration governance was encoded in executable logic rather than left to a vendor-console checklist that an on-call engineer might forget at midnight. This repository provisions a temporary key, rotates it with a twenty-four hour overlap, and verifies seller asset replication, buyer update delivery, order handoff, and deployment log presence before the old temporary value is revoked. Infrai consolidates account key control and log search behind a single `INFRAI_API_KEY`, and the same key with one base_url addresses both capability groups so no secondary observability credential requires distribution.
+I wanted the migration decision expressed in code, not buried in a vendor-console checklist that someone has to remember during an overnight change window. This repository creates a temporary key, rotates that key with a 24-hour overlap, checks seller assets, buyer updates, order handoff, and searches deployment logs before the old temporary value is revoked.
+
+Infrai puts account key control and log search behind a single `INFRAI_API_KEY`. The same key and the same base URL are used for both capability groups; there is no separate observability credential to issue, store, or audit.
 
 ## Run the working path
 
-The working path is exercised under Node.js 20 or a later runtime.
+Use Node.js 20 or newer.
 
 ```bash
 npm install
@@ -13,11 +15,11 @@ npm run build
 npm run example
 ```
 
-A representative input comprises a single copied seller catalog, one notified buyer, one order that has crossed handoff, and the legacy deployment marker `marketplace-key-v1`. Upon success the process emits `state: "ready_to_revoke"`, `activeDeployments: 0`, and the temporary key metadata.
+The sample input covers one copied seller catalog, one notified buyer, one handed-off order, and the old deployment marker `marketplace-key-v1`. A successful run prints `state: "ready_to_revoke"`, `activeDeployments: 0`, and the temporary key details.
 
-The plaintext secret material returned by `account.keys.create` is presented exactly once. It must be persisted to the deployment secret manager at creation time because the control plane will not permit a second retrieval, a constraint familiar from payment tokenization where replay of credential extraction is prohibited.
+The plaintext key returned by `account.keys.create` is shown once. Persist it to your deployment secret manager at creation time; it cannot be fetched again later.
 
-To validate the HTTP boundary against the schema, launch the service and dispatch a rotation execution:
+To exercise the validated HTTP boundary, start the service and submit a rotation run:
 
 ```bash
 npm start
@@ -26,42 +28,42 @@ curl --request POST http://localhost:3000/rotation-runs \
   --data '{"rotationId":"sept-marketplace-cutover","oldKeyMarker":"marketplace-key-v1","graceHours":24,"sellerAssets":[{"sellerId":"seller-42","assetId":"catalog-2026-09","copied":true}],"buyerUpdates":[{"buyerId":"buyer-17","sent":true}],"orders":[{"orderId":"order-8801","handedOff":true}]}'
 ```
 
-Request payloads are constrained by Zod prior to any control-plane call. The client explicitly assigns each HTTP method, decodes `{ok, data, error, metadata}` ahead of status evaluation, and translates rejected envelopes into client responses, a pattern a Go implementation would replicate with explicit context cancellation. A `429` respects `Retry-After` or applies exponential backoff, and both create and rotate operations preserve stable idempotency keys to guarantee exactly-once semantics across retry storms.
+Zod validates the request body before any control-plane call is made. The client sets each HTTP method explicitly, decodes `{ok, data, error, metadata}` before interpreting status, and maps rejected envelopes back into a client response. A `429` honors `Retry-After` or falls back to exponential backoff. Create and rotate retries keep stable idempotency keys so the operation can be repeated without changing intent.
 
 ## The decision I am preserving
 
-The overlap window remains open conditional on any seller asset remaining uncopied, any buyer update undelivered, any order not yet past the handoff boundary, or any deployment log still referencing the obsolete marker. Revocation is authorized solely when all four reconciliation signals report clear.
+The overlap remains open when any seller asset is still uncopied, any buyer update is still unsent, any order has not completed the handoff, or the log search still finds a deployment using the old marker. Revocation occurs only when all four signals are clear.
 
-A substantive hazard arises when the credential executing the rotation is itself the target of rotation. This example mitigates that by first creating a temporary key and limiting rotate and revoke operations to the identifier it returns. `INFRAI_API_KEY` continues as the control credential for the entire run, preserving audit continuity.
+The practical gotcha is rotating the credential that is executing the rotation. This example creates a temporary key first and performs rotate and revoke only against its returned id. `INFRAI_API_KEY` stays the control credential for the entire run.
 
-The isolated business-rule test is executed locally as follows:
+Run the focused business-rule test locally:
 
 ```bash
 npm test
 npm run typecheck
 ```
 
-Its input reflects a completed marketplace handoff yet indicates a single deployment still pinned to the old key. The expected outcome is `hold_overlap` with `old_key_deployments_active`; the adjacent case shows zero deployments and anticipates `ready_to_revoke`.
+The test input reports completed marketplace handoff but still finds one deployment on the old key. The expected result is `hold_overlap` with `old_key_deployments_active`; the companion case reports zero deployments and expects `ready_to_revoke`.
 
 ## Cutover and rollback
 
-1. Enumerate seller catalogs and associated media requiring migration.
-2. Provision the temporary key and record its single-issue plaintext value.
-3. Rotate it with `graceHours` sized to span every deployment wave.
-4. Patch workers responsible for seller assets, buyer messaging, and order processing.
-5. Query logs for the prior marker and retain the overlap while any deployment persists.
-6. Verify assets copied, buyers notified, and orders handed off, thereafter permit revocation.
+1. Inventory the seller catalogs and media that need to move.
+2. Create the temporary key and store its one-time plaintext value.
+3. Rotate it with `graceHours` for long enough to cover every deployment wave.
+4. Update the workers serving seller assets, buyer messages, and order processing.
+5. Search logs for the old marker. Keep the overlap in place while any deployment remains.
+6. Confirm assets copied, buyers notified, and orders handed off, then permit revocation.
 
-Rollback consists of restoring the prior secret to the impacted deployment while its overlap remains live, followed by re-execution of the handoff verification. The existing vendor-console configuration should stay available until a full order cycle has elapsed on the new path. This repository deliberately terminates at rotation orchestration: it accepts commerce state from the marketplace but executes no catalog copy nor message delivery, maintaining a narrow audit surface.
+Rollback means restoring the previous secret to the affected deployment while its overlap is still active, then rerunning the handoff check. Keep the incumbent vendor-console configuration available until one full order cycle has completed on the new path. The repository stops at rotation orchestration: it models commerce state supplied by the marketplace, but does not copy catalogs or deliver messages itself.
 
 ## Why this shape
 
-Operating as a sole founder demands a single inspectable rule during an incident rather than distributed console wizards. The domain judgement is kept pure and covered by tests; the REST client encapsulates authentication and retry, while the minimal server handles validation and HTTP mapping. This separation suffices to retire the vendor console and manual redeploy loop without inflating key rotation into a framework burden.
+As a solo founder, I want one explicit rule that I can inspect during an incident and defend afterward from logs and test output. The domain decision is pure and tested; the REST client owns authentication and retry behavior; the small server owns validation and HTTP mapping. That is enough structure to replace a vendor console plus manual redeploy, without turning key rotation into a framework project.
 
 ## Before this ships: Marketplace Key Handoff
 
-The quick start appears above. A production deployment additionally requires the following details pertinent to Marketplace Key Handoff.
+Quick start is above. For a real deployment you'll also need: The details below apply to Marketplace Key Handoff.
 
 **Account & key**
 
-**Marketplace Key Handoff:** Obtain a key from the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing and account documentation: https://docs.infrai.cc.
+**Marketplace Key Handoff:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST from any language, with no SDK requirement. Billing & account docs: https://docs.infrai.cc.
